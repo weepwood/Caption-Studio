@@ -5,6 +5,10 @@
 
 > 在 [sudesh1456/whisper-caption-editor](https://github.com/sudesh1456/whisper-caption-editor)（MIT）的实现思路上制作的独立优化版本。**保留浏览器本地 Whisper + 字幕编辑 + SRT/VTT + MP4 烧录路径**，重点增强中文字幕、时间轴和项目恢复体验。
 
+## v0.4.0 界面与校对体验更新
+
+本版本增加字幕问题筛选与逐项定位、文本整理、重叠时间修复、全文查找替换、列表分页、播放倍速、单条字幕循环、拖拽导入、快捷键帮助及工作流导航。详细内容见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 快速启动
 
 建议使用 **Node.js 22.12+** 和 **npm 11.6+**（旧 npm 10 在部分 Vitest 依赖组合下可能出现 `edgesOut` 错误）：

@@ -1,6 +1,7 @@
 import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
-import {Activity,AlertTriangle,ArrowDownToLine,AudioLines,Check,ChevronDown,Clock3,Download,FileAudio,FileText,FileVideo,FolderOpen,HardDriveDownload,Info,Languages,LoaderCircle,Pause,Play,Plus,RotateCcw,Scissors,Search,Settings2,ShieldCheck,SkipBack,SkipForward,Split,Subtitles,Trash2,Undo2,Redo2,UploadCloud,Volume2,WandSparkles,X} from 'lucide-react';
+import {Activity,AlertTriangle,ArrowDownToLine,AudioLines,Check,ChevronDown,Clock3,Download,FileAudio,FileText,FileVideo,FolderOpen,HardDriveDownload,Info,Languages,LoaderCircle,Pause,Play,Plus,RotateCcw,Scissors,Search,Settings2,ShieldCheck,SkipBack,SkipForward,Split,Subtitles,Trash2,Undo2,Redo2,UploadCloud,WandSparkles,X,Keyboard,Repeat2} from 'lucide-react';
 import {Timeline} from './components/Timeline';
+import {ReviewTools} from './components/ReviewTools';
 import {useHistory} from './hooks/useHistory';
 import {useTranscriber} from './hooks/useTranscriber';
 import {chunksToCues,defaultStyle,fmt,lintCue,mergeNext,parseSubtitles,parseTime,round3,shiftCues,shortTime,sorted,splitCue,toSRT,toVTT,uid,type CaptionStyle,type Chunk,type Cue,type Issue} from './lib/captions';
@@ -47,6 +48,14 @@ export default function App(){
   const [selectedId,setSelectedId]=useState<string|null>(null);
   const [tab,setTab]=useState<Tab>('cues');
   const [query,setQuery]=useState('');
+  const [onlyIssues,setOnlyIssues]=useState(false);
+  const [cuePage,setCuePage]=useState(0);
+  const [followPlayback,setFollowPlayback]=useState(true);
+  const [playbackRate,setPlaybackRate]=useState(1);
+  const [loopSelected,setLoopSelected]=useState(false);
+  const [shortcutsOpen,setShortcutsOpen]=useState(false);
+  const [dragging,setDragging]=useState(false);
+  const dragDepth=useRef(0);
   const [error,setError]=useState('');
   const [saved,setSaved]=useState<'loading'|'saved'|'saving'|'error'>('loading');
   const [hydrated,setHydrated]=useState(false);
@@ -58,6 +67,8 @@ export default function App(){
   const captionsInput=useRef<HTMLInputElement>(null);
   const projectInput=useRef<HTMLInputElement>(null);
   const fontInput=useRef<HTMLInputElement>(null);
+  const searchInput=useRef<HTMLInputElement>(null);
+  const cueListRef=useRef<HTMLDivElement>(null);
   const renderAbort=useRef<AbortController|null>(null);
   const {value:cues,set:setCues,reset:resetCues,undo,redo,canUndo,canRedo}=useHistory<Cue[]>([]);
   const [mediaURL,setMediaURL]=useState<string|null>(null);
@@ -67,11 +78,27 @@ export default function App(){
     return()=>URL.revokeObjectURL(url);
   },[file]);
   const isVideo=Boolean(file?.type.startsWith('video/')||file?.name.match(/\.(mp4|mov|webm|m4v)$/i));
-  const effectiveDuration=Math.max(duration,...cues.map(c=>c.end),0);
+  const effectiveDuration=cues.reduce((max,cue)=>Math.max(max,cue.end),duration);
   const activeCue=useMemo(()=>cues.find(c=>time>=c.start&&time<c.end)??null,[cues,time]);
   const selectedCue=cues.find(c=>c.id===selectedId)??null;
   const problemCount=useMemo(()=>cues.reduce((n,c,i)=>n+lintCue(c,cues[i+1]).length,0),[cues]);
-  const shown=useMemo(()=>cues.filter(c=>c.text.toLocaleLowerCase().includes(query.toLocaleLowerCase())),[cues,query]);
+  const shown=useMemo(()=>cues.filter((c,i)=>(!onlyIssues||lintCue(c,cues[i+1]).length>0)&&c.text.toLocaleLowerCase().includes(query.toLocaleLowerCase())),[cues,query,onlyIssues]);
+  const cueIndex=useMemo(()=>new Map(cues.map((cue,i)=>[cue.id,i])),[cues]);
+  const pageCount=Math.max(1,Math.ceil(shown.length/100));
+  const currentPage=Math.min(cuePage,pageCount-1);
+  const pageCues=shown.slice(currentPage*100,(currentPage+1)*100);
+  useEffect(()=>setCuePage(0),[query,onlyIssues]);
+  useEffect(()=>{
+    if(!followPlayback||tab!=='cues'||query||onlyIssues||!activeCue)return;
+    const index=cueIndex.get(activeCue.id);
+    if(index!==undefined){
+      const nextPage=Math.floor(index/100);
+      if(nextPage!==currentPage){setCuePage(nextPage);return;}
+    }
+    const active=cueListRef.current?.querySelector('[data-current="true"]');
+    if(active && !active.contains(document.activeElement))active.scrollIntoView({block:'nearest',behavior:'smooth'});
+  },[activeCue?.id,followPlayback,tab,query,onlyIssues,cueIndex,currentPage]);
+  useEffect(()=>{if(video.current)video.current.playbackRate=playbackRate},[playbackRate,mediaURL]);
   const onChunks=useCallback((chunks:Chunk[])=>{
     setCues(previous=>sorted([...previous,...chunksToCues(chunks,maxChars,duration||undefined)]));
     setTab('cues');setSelectedId(null);
@@ -170,6 +197,12 @@ export default function App(){
     const cue:Cue={id:uid(),start:round3(start),end:round3(end),text:''};
     setCues(list=>[...list.slice(0,index+1),cue,...list.slice(index+1)]);setSelectedId(cue.id);
   };
+  const jumpToCue=(id:string)=>{
+    const cue=cues.find(c=>c.id===id);
+    if(!cue)return;
+    setTab('cues');setOnlyIssues(false);setQuery('');setCuePage(Math.floor((cueIndex.get(id)??0)/100));setSelectedId(id);seek(cue.start);
+    window.requestAnimationFrame(()=>cueListRef.current?.querySelector(`[data-cue-id="${id}"]`)?.scrollIntoView({block:'center',behavior:'smooth'}));
+  };
   const exportAs=(kind:'srt'|'vtt'|'json')=>{
     const valid=cues.filter(c=>c.end>c.start&&c.text.trim());
     if(!valid.length){setError('没有可导出的有效字幕');return;}
@@ -196,23 +229,37 @@ export default function App(){
   useEffect(()=>{
     const handle=(e:KeyboardEvent)=>{
       const input=(e.target as HTMLElement).closest('textarea,input,select,[contenteditable]');
-      if(input)return;
+      if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){
+        e.preventDefault();setTab('cues');setOnlyIssues(false);
+        window.requestAnimationFrame(()=>searchInput.current?.focus());return;
+      }
+      if(e.key==='Escape'&&shortcutsOpen){setShortcutsOpen(false);return;}
+      if(input||shortcutsOpen)return;
+      if(e.key==='?'){e.preventDefault();setShortcutsOpen(true);return;}
       if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'){
         e.preventDefault();if(e.shiftKey)redo();else undo();
       }else if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='y'){e.preventDefault();redo()}
-      else if(e.code==='Space'){e.preventDefault();play()}
+      else if(e.code==='Space'||e.key.toLowerCase()==='k'){e.preventDefault();play()}
+      else if(e.key.toLowerCase()==='j'){e.preventDefault();seek(time-5)}
+      else if(e.key.toLowerCase()==='l'){e.preventDefault();seek(time+5)}
     };
     window.addEventListener('keydown',handle);return()=>window.removeEventListener('keydown',handle);
   });
   const mediaMissing=Boolean(originalMediaName&&!file);
 
-  return <div className="app-shell" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();if(e.dataTransfer.files[0])openMediaOrSubtitle(e.dataTransfer.files[0])}}>
+  return <div className={`app-shell ${dragging?'dragging':''}`}
+    onDragEnter={e=>{if(Array.from(e.dataTransfer.types).includes('Files')){dragDepth.current++;setDragging(true)}}}
+    onDragOver={e=>{if(Array.from(e.dataTransfer.types).includes('Files')){e.preventDefault();e.dataTransfer.dropEffect='copy'}}}
+    onDragLeave={e=>{if(Array.from(e.dataTransfer.types).includes('Files')){dragDepth.current=Math.max(0,dragDepth.current-1);if(!dragDepth.current)setDragging(false)}}}
+    onDrop={e=>{e.preventDefault();dragDepth.current=0;setDragging(false);if(e.dataTransfer.files[0])openMediaOrSubtitle(e.dataTransfer.files[0])}}>
+    {dragging&&<div className="file-drop-overlay" role="status"><div><UploadCloud size={30}/><strong>松开以导入文件</strong><span>支持音视频、SRT、VTT 与字幕工程</span></div></div>}
     <header className="topbar">
       <div className="brand"><span className="brand-mark"><AudioLines size={20} strokeWidth={2.5}/></span><div><b>caption<span className="brand-light">studio</span></b><small>LOCAL FIRST EDITOR</small></div></div>
       <span className="header-divider"/>
       <div className="project-name"><input aria-label="项目名称" value={projectName} onChange={e=>setProjectName(e.target.value)} maxLength={100}/><ChevronDown size={14}/></div>
       <div className="header-spacer"/>
       <div className="save-indicator">{saved==='saved'?<Check size={14}/>:saved==='saving'?<LoaderCircle className="spin" size={14}/>:<AlertTriangle size={14}/>} <span>{saved==='saved'?'已保存到本地':saved==='saving'?'正在保存':saved==='loading'?'正在读取':'保存失败'}</span></div>
+      <button className="btn small icon-help" onClick={()=>setShortcutsOpen(true)} title="查看键盘快捷键" aria-label="键盘快捷键"><Keyboard size={17}/></button>
       <button className="btn small outline" onClick={exportProject}><HardDriveDownload size={16}/>导出工程</button>
       <button className="btn small primary" onClick={()=>mediaInput.current?.click()}><FolderOpen size={16}/>打开媒体</button>
     </header>
@@ -230,12 +277,18 @@ export default function App(){
         <div className="rail-spacer"/>
         <div className="rail-info"><ShieldCheck size={17}/><div><b>纯本地处理</b><small>媒体不会上传到服务端。模型与运行资源需首次联网下载。</small></div></div>
         <button className="rail-item reset" onClick={()=>{if(window.confirm('确定新建空白工程？未导出的媒体不会保存。'))void reset()}}><RotateCcw size={17}/>新建工程</button>
-        <div className="rail-version">CAPTION STUDIO · 0.3.0</div>
+        <div className="rail-version">CAPTION STUDIO · 0.4.0</div>
       </aside>
       <main className="editor-area">
         <div className="editor-header">
           <div><div className="eyebrow">EDITOR / LOCAL WORKSPACE</div><h1>字幕编辑工作台</h1><p>导入媒体 · 本地识别 · 精确校对 · 导出成片</p></div>
           <div className="editor-header-actions">{iconStatus('无需上传视频')}<span className="line-separator"/><span className="header-meta">{cues.length} 条字幕</span></div>
+        </div>
+        <div className="workflow-strip" aria-label="制作流程">
+          <div className={`workflow-step ${file?'complete':'current'}`}><span>01</span><div><b>导入素材</b><small>{file?'已关联本地媒体':'等待选择媒体'}</small></div></div>
+          <div className={`workflow-step ${busy?'current':cues.length?'complete':''}`}><span>02</span><div><b>语音转录</b><small>{busy?'正在处理':cues.length?'已生成字幕':'本地 Whisper'}</small></div></div>
+          <div className={`workflow-step ${cues.length?'current':''}`}><span>03</span><div><b>字幕校对</b><small>{cues.length?`${cues.length} 条 · ${problemCount} 项提示`:'精确调整时间轴'}</small></div></div>
+          <button className="workflow-step workflow-action" disabled={!cues.length} onClick={()=>setTab('export')}><span>04</span><div><b>导出成果</b><small>SRT / VTT / MP4</small></div><ArrowDownToLine size={15}/></button>
         </div>
         {error&&<div className="error-banner" role="alert"><AlertTriangle size={16}/><span>{error}</span><button aria-label="关闭错误提示" onClick={()=>setError('')}><X size={16}/></button></div>}
         {mediaMissing&&<div className="notice-banner"><Info size={16}/>已恢复字幕工程，但媒体文件不会自动保存。请重新打开「{originalMediaName}」以继续视频预览。</div>}
@@ -245,7 +298,13 @@ export default function App(){
               <div className="section-title"><div><strong>视频预览</strong><span className="subtle">PREVIEW</span></div><span className="chip">{isVideo?'视频':'本地媒体'}</span></div>
               <div className="video-frame">
                 {mediaURL?<>
-                  <video ref={video} src={mediaURL} playsInline onTimeUpdate={e=>setTime(e.currentTarget.currentTime)} onLoadedMetadata={e=>{if(Number.isFinite(e.currentTarget.duration))setDuration(e.currentTarget.duration)}} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)} onClick={play}/>
+                  <video ref={video} src={mediaURL} playsInline onTimeUpdate={e=>{
+                     const v=e.currentTarget;
+                     if(loopSelected&&selectedCue&&selectedCue.end>selectedCue.start&&!v.paused&&(v.currentTime>=selectedCue.end||v.currentTime<selectedCue.start)){
+                       v.currentTime=selectedCue.start;
+                     }
+                     setTime(v.currentTime);
+                   }} onLoadedMetadata={e=>{if(Number.isFinite(e.currentTarget.duration))setDuration(e.currentTarget.duration);e.currentTarget.playbackRate=playbackRate}} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)} onClick={play}/>
                   {activeCue&&<div className={`caption-overlay ${style.position}`}><span style={{color:style.textColor,backgroundColor:colorAlpha(style.boxColor,style.boxOpacity),fontSize:`clamp(14px,${(style.fontSize/1080*100).toFixed(2)}cqh,${style.fontSize}px)`,fontWeight:style.bold?700:400}}>{activeCue.text}</span></div>}
                   {!isVideo&&<div className="audio-backdrop"><Activity size={50} strokeWidth={1.1}/><p>音频预览</p></div>}
                 </>:<div className="empty-media"><div className="empty-icon"><UploadCloud size={25}/></div><h2>从这里开始</h2><p>拖入 MP4、WebM、MP3 或 WAV，或直接导入已有字幕文件。</p><div className="empty-actions"><button className="btn primary" onClick={()=>mediaInput.current?.click()}><FileVideo size={16}/>选择媒体文件</button><button className="btn outline" onClick={()=>captionsInput.current?.click()}><FileText size={16}/>导入 SRT / VTT</button></div>{!cues.length&&<button className="text-button" onClick={()=>{resetCues(sampleCues.map(c=>({...c,id:uid()})));setSelectedId(null);setProjectName('示例字幕')}}>仅体验编辑器：加载示例字幕</button>}</div>}
@@ -256,7 +315,8 @@ export default function App(){
                 <button className="icon-btn" title="前进 5 秒" onClick={()=>seek(time+5)}><SkipForward size={17}/></button>
                 <span className="playback-time">{shortTime(time)} <span>/ {shortTime(effectiveDuration)}</span></span>
                 <input type="range" min={0} max={effectiveDuration||1} step={.01} value={Math.min(time,effectiveDuration)} aria-label="跳转播放位置" onChange={e=>seek(Number(e.target.value))}/>
-                <span className="playback-volume"><Volume2 size={17}/></span>
+                <button className={`icon-btn loop-button ${loopSelected?'active':''}`} disabled={!selectedCue||!file} aria-pressed={loopSelected} title="循环播放已选字幕" aria-label="循环播放选中字幕" onClick={()=>{if(!loopSelected&&selectedCue)seek(selectedCue.start);setLoopSelected(v=>!v)}}><Repeat2 size={17}/></button>
+                <label className="speed-control"><span>倍速</span><select aria-label="播放速度" value={playbackRate} onChange={e=>setPlaybackRate(Number(e.target.value))}>{[.5,.75,1,1.25,1.5,2].map(rate=><option key={rate} value={rate}>{rate}×</option>)}</select></label>
               </div>
               <div className="media-info"><div><FileAudio size={15}/><span>{file?.name??'尚未打开媒体文件'}</span></div><span>{file?sizeText(file.size):'—'}</span></div>
             </section>
@@ -284,11 +344,13 @@ export default function App(){
               <button role="tab" aria-selected={tab==='export'} className={tab==='export'?'active':''} onClick={()=>setTab('export')}><ArrowDownToLine size={16}/>导出</button>
             </div>
             {tab==='cues'&&<>
-              <div className="side-tools"><div className="subtitle-search"><Search size={15}/><input placeholder="搜索字幕内容" aria-label="搜索字幕" value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="history-buttons"><button className="icon-btn" disabled={!canUndo} onClick={undo} title="撤销 (Ctrl+Z)"><Undo2 size={16}/></button><button className="icon-btn" disabled={!canRedo} onClick={redo} title="重做"><Redo2 size={16}/></button></div></div>
-              <div className="cue-stats"><span>{shown.length} / {cues.length} 条字幕</span><span className={problemCount?'issue-count':''}>{problemCount?<AlertTriangle size={13}/>:<Check size={13}/>} {problemCount} 项检查提示</span></div>
-              <div className="cue-list">
+              <div className="side-tools"><div className="subtitle-search"><Search size={15}/><input ref={searchInput} placeholder="搜索字幕内容 · ⌘K" aria-label="搜索字幕" value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="history-buttons"><button className="icon-btn" disabled={!canUndo} onClick={undo} title="撤销 (Ctrl+Z)"><Undo2 size={16}/></button><button className="icon-btn" disabled={!canRedo} onClick={redo} title="重做"><Redo2 size={16}/></button></div></div>
+              <ReviewTools cues={cues} query={query} onlyIssues={onlyIssues} followPlayback={followPlayback} selectedId={selectedId}
+                onToggleIssues={setOnlyIssues} onFollowPlayback={setFollowPlayback} onNavigate={jumpToCue} onChange={setCues}/>
+              <div className="cue-stats"><span>{shown.length} / {cues.length} 条字幕</span><div className="cue-pagination"><button disabled={currentPage===0} title="上一页字幕" onClick={()=>setCuePage(p=>Math.max(0,p-1))}>‹</button><span>{currentPage+1}/{pageCount}</span><button disabled={currentPage>=pageCount-1} title="下一页字幕" onClick={()=>setCuePage(p=>Math.min(pageCount-1,p+1))}>›</button></div><span className={problemCount?'issue-count':''}>{problemCount?<AlertTriangle size={13}/>:<Check size={13}/>} {problemCount} 项检查提示</span></div>
+              <div className="cue-list" ref={cueListRef}>
                 {!cues.length?<div className="empty-cues"><FileText size={29}/><h3>还没有字幕</h3><p>识别语音、导入字幕，或手动新增一条。</p><button className="btn outline" onClick={()=>insertAfter()}><Plus size={15}/>新增字幕</button></div>:shown.length===0?<div className="empty-cues"><Search size={22}/>没有匹配的字幕</div>:
-                  shown.map((c)=>{const index=cues.findIndex(x=>x.id===c.id),issues=lintCue(c,cues[index+1]);return <article key={c.id} className={`cue-row ${selectedId===c.id?'selected':''} ${activeCue?.id===c.id?'playing':''}`} onClick={()=>setSelectedId(c.id)}>
+                  pageCues.map((c)=>{const index=cueIndex.get(c.id)??-1,issues=lintCue(c,cues[index+1]);return <article key={c.id} data-cue-id={c.id} data-current={activeCue?.id===c.id} className={`cue-row ${selectedId===c.id?'selected':''} ${activeCue?.id===c.id?'playing':''}`} onClick={()=>setSelectedId(c.id)}>
                     <div className="cue-row-top"><button className="cue-number" onClick={e=>{e.stopPropagation();seek(c.start);setSelectedId(c.id)}}>{String(index+1).padStart(2,'0')}</button><span className="cue-duration">{(c.end-c.start).toFixed(1)}s</span><div className="cue-row-actions"><button title="在当前位置拆分" onClick={()=>setCues(xs=>splitCue(xs,c.id))}><Scissors size={14}/></button><button title="与下一条合并" disabled={index===cues.length-1} onClick={()=>setCues(xs=>mergeNext(xs,c.id))}><Split size={14}/></button><button title="新增下一条" onClick={()=>insertAfter(c.id)}><Plus size={14}/></button><button title="删除字幕" onClick={()=>setCues(xs=>xs.filter(x=>x.id!==c.id))}><Trash2 size={14}/></button></div></div>
                     <textarea aria-label={`第 ${index+1} 条字幕`} rows={Math.max(2,Math.min(4,Math.ceil(c.text.length/30)))} value={c.text} onChange={e=>updateCue(c.id,{text:e.target.value})} onFocus={()=>setSelectedId(c.id)}/>
                     <div className="cue-row-bottom"><TimeEditor label="开始时间" time={c.start} onCommit={v=>updateCue(c.id,{start:v})}/><span>→</span><TimeEditor label="结束时间" time={c.end} onCommit={v=>updateCue(c.id,{end:v})}/><button className="cue-seek" onClick={()=>{seek(c.start);setSelectedId(c.id)}} title="跳转到字幕"><Play size={12}/></button></div>
@@ -327,6 +389,13 @@ export default function App(){
         <div className="bottom-meta"><div><Clock3 size={14}/> {effectiveDuration?`媒体时长 ${fmt(effectiveDuration,'vtt')}`:'等待媒体'} <span className="dot">·</span>{selectedCue?`已选中第 ${cues.findIndex(c=>c.id===selectedId)+1} 条字幕`:'未选择字幕'}</div><div><button onClick={()=>void makeWaveform()} disabled={!file||busy}><AudioLines size={14}/> {peaks.length?'重新提取波形':'提取音频波形'}</button><span className="dot">·</span><a href="https://github.com/sudesh1456/whisper-caption-editor" target="_blank" rel="noreferrer">原项目 / MIT</a></div></div>
       </main>
     </div>
+    {shortcutsOpen&&<div className="shortcut-scrim" onMouseDown={e=>{if(e.target===e.currentTarget)setShortcutsOpen(false)}}>
+      <div className="shortcut-dialog" role="dialog" aria-modal="true" aria-label="键盘快捷键">
+        <div className="shortcut-heading"><div><Keyboard size={20}/><strong>键盘快捷键</strong></div><button aria-label="关闭快捷键" onClick={()=>setShortcutsOpen(false)}><X size={18}/></button></div>
+        <div className="shortcut-grid"><span>播放 / 暂停</span><kbd>Space</kbd><span>后退 / 前进 5 秒</span><div><kbd>J</kbd> <kbd>L</kbd></div><span>查找字幕</span><kbd>Ctrl / ⌘ + K</kbd><span>撤销</span><kbd>Ctrl / ⌘ + Z</kbd><span>重做</span><kbd>Ctrl / ⌘ + Shift + Z</kbd><span>查看帮助</span><kbd>?</kbd></div>
+        <p>编辑文本时不会触发播放快捷键，支持时间轴拖拽校时。</p>
+      </div>
+    </div>}
   </div>;
 }
 
