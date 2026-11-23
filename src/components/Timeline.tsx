@@ -50,7 +50,7 @@ export function Timeline({duration,cues,peaks,time,selectedId,onSeek,onSelect,on
     for(let v=Math.ceil(start/step)*step;v<start+visible;v+=step)values.push(v);
     return values;
   },[visible,start]);
-  const point=(e:React.PointerEvent)=>{
+  const point=(e:{clientX:number})=>{
     const r=track.current?.getBoundingClientRect();
     if(!r)return 0;
     return Math.min(duration,Math.max(0,start+(e.clientX-r.left)/r.width*visible));
