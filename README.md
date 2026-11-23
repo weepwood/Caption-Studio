@@ -1,10 +1,13 @@
 # Caption Studio / 本地 AI 字幕工作台
 
+**在线版本：** [https://weepwood.github.io/Caption-Studio/](https://weepwood.github.io/Caption-Studio/) · [GitHub Actions 部署记录](https://github.com/weepwood/Caption-Studio/actions)
+
+
 > 在 [sudesh1456/whisper-caption-editor](https://github.com/sudesh1456/whisper-caption-editor)（MIT）的实现思路上制作的独立优化版本。**保留浏览器本地 Whisper + 字幕编辑 + SRT/VTT + MP4 烧录路径**，重点增强中文字幕、时间轴和项目恢复体验。
 
 ## 快速启动
 
-需要 **Node.js 22.12+** 和 npm：
+建议使用 **Node.js 22.12+** 和 **npm 11.6+**（旧 npm 10 在部分 Vitest 依赖组合下可能出现 `edgesOut` 错误）：
 
 ```bash
 npm install
