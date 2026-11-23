@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: 更新 npm 以规避 Node 22 自带 npm 10 的依赖解析问题
+        run: npm install -g npm@11.21.1
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
