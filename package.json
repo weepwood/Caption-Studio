@@ -1,6 +1,6 @@
 {
   "name": "whisper-caption-studio",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Local-first Whisper subtitle editor, based on sudesh1456/whisper-caption-editor (MIT).",
@@ -15,6 +15,7 @@
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@huggingface/transformers": "^4.3.0",
+    "mediabunny": "^1.66.2",
     "lucide-react": "^0.468.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"

@@ -60,3 +60,8 @@
 将此目录创建为自己名下的独立 GitHub 仓库，首次联网执行 `npm install`，提交生成的 `package-lock.json`，随后把 workflow 改回 `npm ci`。请先完成 `.srt/.vtt` 导出、中文转录和播放对齐 E2E，确认 MP4 烧录与中文字体无问题，再发布长期可用版本。
 
 **许可**：保留源项目 MIT 署名；字体、Transformers.js 及 FFmpeg 运行时资源遵守各自许可证。详见 `ATTRIBUTION.md`。
+
+
+## 2026-11-23：超大媒体自动提取音轨（v0.3.0）
+
+已替换原有 `file.arrayBuffer() + decodeAudioData()` 一次性处理流程。现在通过 Mediabunny BlobSource + WebCodecs 在 Worker 中解码单独音轨；每次仅持有有限 PCM 音频片段，由 Whisper 分段识别并增量追加字幕。删除超 350MB 拦截。补充重叠边界裁剪和有界波形缓存的单元测试。注意浏览器真实 1GB/4GB/12GB 视频兼容性及音频转录完整性尚需端到端压力测试。

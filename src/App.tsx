@@ -3,7 +3,6 @@ import {Activity,AlertTriangle,ArrowDownToLine,AudioLines,Check,ChevronDown,Cloc
 import {Timeline} from './components/Timeline';
 import {useHistory} from './hooks/useHistory';
 import {useTranscriber} from './hooks/useTranscriber';
-import {decodeAudio} from './lib/audio';
 import {chunksToCues,defaultStyle,fmt,lintCue,mergeNext,parseSubtitles,parseTime,round3,shiftCues,shortTime,sorted,splitCue,toSRT,toVTT,uid,type CaptionStyle,type Chunk,type Cue,type Issue} from './lib/captions';
 import {clearProject,loadProject,saveProject,verifyProject,type Project} from './lib/storage';
 import type {Device} from './workers/transcribe.worker';
@@ -40,7 +39,6 @@ export default function App(){
   const [time,setTime]=useState(0);
   const [playing,setPlaying]=useState(false);
   const [peaks,setPeaks]=useState<number[]>([]);
-  const [decoding,setDecoding]=useState(false);
   const [model,setModel]=useState(MODELS[1].id);
   const [language,setLanguage]=useState('auto');
   const [device,setDevice]=useState<Device>('auto');
@@ -61,7 +59,6 @@ export default function App(){
   const projectInput=useRef<HTMLInputElement>(null);
   const fontInput=useRef<HTMLInputElement>(null);
   const renderAbort=useRef<AbortController|null>(null);
-  const decodeSequence=useRef(0);
   const {value:cues,set:setCues,reset:resetCues,undo,redo,canUndo,canRedo}=useHistory<Cue[]>([]);
   const [mediaURL,setMediaURL]=useState<string|null>(null);
   useEffect(()=>{
@@ -76,11 +73,11 @@ export default function App(){
   const problemCount=useMemo(()=>cues.reduce((n,c,i)=>n+lintCue(c,cues[i+1]).length,0),[cues]);
   const shown=useMemo(()=>cues.filter(c=>c.text.toLocaleLowerCase().includes(query.toLocaleLowerCase())),[cues,query]);
   const onChunks=useCallback((chunks:Chunk[])=>{
-    setCues(chunksToCues(chunks,maxChars,duration||undefined));
+    setCues(previous=>sorted([...previous,...chunksToCues(chunks,maxChars,duration||undefined)]));
     setTab('cues');setSelectedId(null);
   },[duration,maxChars,setCues]);
-  const transcriber=useTranscriber(onChunks);
-  const busy=decoding||['loading','running'].includes(transcriber.state.phase);
+  const transcriber=useTranscriber(onChunks,setPeaks);
+  const busy=['loading','extracting','running'].includes(transcriber.state.phase);
 
   useEffect(()=>{
     let cancelled=false;
@@ -108,7 +105,7 @@ export default function App(){
     }
     const relink=Boolean(cues.length&&(!file&&!originalMediaName||originalMediaName===f.name));
     if(cues.length&&!relink&&!window.confirm('打开新媒体将清空当前字幕。请先导出工程或字幕。确定继续？'))return;
-    decodeSequence.current++;transcriber.stop();setDecoding(false);setError('');setFile(f);
+    transcriber.stop();setError('');setFile(f);
     if(!relink){setProjectName(baseName(f.name));setDuration(0);setSelectedId(null);resetCues([])}
     setOriginalMediaName(f.name);setTime(0);setPeaks([]);
     setRenderState({phase:'idle',progress:0,message:''});
@@ -133,13 +130,13 @@ export default function App(){
   const importProject=async(f:File)=>{
     try{
       const p=verifyProject(JSON.parse(await f.text()));
-      decodeSequence.current++;transcriber.stop();setDecoding(false);setFile(null);setPeaks([]);setTime(0);
+      transcriber.stop();setFile(null);setPeaks([]);setTime(0);
       setDuration(p.duration);setProjectName(p.name);setOriginalMediaName(p.mediaName);
       setStyle(p.style);resetCues(p.cues);setSelectedId(null);setError('');setTab('cues');
     }catch(e){setError(`项目导入失败：${String(e instanceof Error?e.message:e)}`)}
   };
   const reset=async()=>{
-    decodeSequence.current++;transcriber.stop();setDecoding(false);resetCues([]);setFile(null);setPeaks([]);setProjectName('未命名项目');
+    transcriber.stop();resetCues([]);setFile(null);setPeaks([]);setProjectName('未命名项目');
     setOriginalMediaName('');setDuration(0);setTime(0);setSelectedId(null);setStyle(defaultStyle);setError('');
     try{await clearProject()}catch{/* next autosave will replace */}
   };
@@ -149,27 +146,18 @@ export default function App(){
     setTime(t);
   };
   const play=()=>{if(!video.current)return;if(video.current.paused)void video.current.play();else video.current.pause()};
-  const startTranscription=async()=>{
+  const startTranscription=()=>{
     if(!file)return;
-    if(file.size>350*1024*1024){setError('媒体文件超过 350 MB。当前浏览器解码实现需要完整加载音轨，建议先提取音频或压缩视频后再转录。');return;}
     if(cues.length&&!window.confirm('重新转录将替换当前所有字幕。是否继续？'))return;
-    const token=++decodeSequence.current;setError('');setDecoding(true);
-    try{
-      const decoded=await decodeAudio(file);
-      if(token!==decodeSequence.current)return;
-      setPeaks(decoded.peaks);
-      transcriber.transcribe(decoded.pcm,model,language==='auto'?null:language,device);
-    }catch(e){if(token===decodeSequence.current)setError(String(e instanceof Error?e.message:e))}
-    finally{if(token===decodeSequence.current)setDecoding(false)}
+    setError('');setPeaks([]);resetCues([]);setSelectedId(null);setTab('cues');
+    // Automatically extract the original File audio in a Worker, no 350 MB cap.
+    transcriber.transcribe(file,model,language==='auto'?null:language,device);
   };
-  const makeWaveform=async()=>{
+  const makeWaveform=()=>{
     if(!file)return;
-    if(file.size>350*1024*1024){setError('文件过大，请先提取音轨');return;}
-    const token=++decodeSequence.current;setDecoding(true);setError('');
-    try{const d=await decodeAudio(file);if(token===decodeSequence.current)setPeaks(d.peaks);}catch(e){if(token===decodeSequence.current)setError(String(e instanceof Error?e.message:e))}
-    finally{if(token===decodeSequence.current)setDecoding(false)}
+    setError('');setPeaks([]);transcriber.extractWaveform(file);
   };
-  const cancelTask=()=>{decodeSequence.current++;transcriber.stop();setDecoding(false)};
+  const cancelTask=()=>{transcriber.stop()};
   const updateCue=(id:string,patch:Partial<Cue>)=>setCues(list=>{
     const next=list.map(c=>c.id===id?{...c,...patch}:c);
     return 'start' in patch?sorted(next):next;
@@ -242,7 +230,7 @@ export default function App(){
         <div className="rail-spacer"/>
         <div className="rail-info"><ShieldCheck size={17}/><div><b>纯本地处理</b><small>媒体不会上传到服务端。模型与运行资源需首次联网下载。</small></div></div>
         <button className="rail-item reset" onClick={()=>{if(window.confirm('确定新建空白工程？未导出的媒体不会保存。'))void reset()}}><RotateCcw size={17}/>新建工程</button>
-        <div className="rail-version">CAPTION STUDIO · 0.2.0</div>
+        <div className="rail-version">CAPTION STUDIO · 0.3.0</div>
       </aside>
       <main className="editor-area">
         <div className="editor-header">
@@ -280,12 +268,12 @@ export default function App(){
                 <label>计算后端 <select value={device} disabled={busy} onChange={e=>setDevice(e.target.value as Device)}><option value="auto">自动 (GPU 优先)</option><option value="webgpu">WebGPU</option><option value="wasm">CPU / WASM</option></select></label>
                 <label>每条字幕最大字符 <input type="number" min={8} max={120} value={maxChars} disabled={busy} onChange={e=>setMaxChars(Math.min(120,Math.max(8,Number(e.target.value)||30)))}/></label>
               </div>
-              <div className="transcribe-bottom"><div className="transcribe-helper"><Info size={15}/><span>支持中文标点智能分句。首次运行需联网下载模型，推理在本地设备完成。</span></div>
+              <div className="transcribe-bottom"><div className="transcribe-helper"><Info size={15}/><span>自动提取视频音轨，分段识别大文件（无需上传或压缩视频）。首次使用需下载模型。</span></div>
                 {busy?<button className="btn danger-ghost" onClick={cancelTask}><X size={15}/>取消任务</button>:<button className="btn primary" disabled={!file} onClick={()=>void startTranscription()}><WandSparkles size={16}/>{cues.length?'重新生成字幕':'开始自动转录'}</button>}</div>
-              {decoding&&<div className="task-status"><LoaderCircle className="spin" size={15}/>正在提取媒体音轨并生成波形…</div>}
               {transcriber.state.phase==='loading'&&<div className="task-status"><LoaderCircle className="spin" size={15}/>正在准备模型 {Math.round(transcriber.state.progress)}% <progress value={transcriber.state.progress} max="100"/></div>}
-              {transcriber.state.phase==='running'&&<div className="task-status"><LoaderCircle className="spin" size={15}/>正在使用 {transcriber.state.device==='webgpu'?'WebGPU':'WASM'} 识别… {transcriber.state.partial&&<span className="transcript-snippet">{transcriber.state.partial}</span>}</div>}
-              {transcriber.state.phase==='done'&&<div className="task-status done"><Check size={15}/>转录完成 · {transcriber.state.device} · {transcriber.state.seconds.toFixed(1)} 秒</div>}
+              {transcriber.state.phase==='extracting'&&<div className="task-status"><LoaderCircle className="spin" size={15}/>正在从媒体分段提取音轨 · {Math.round(transcriber.state.progress)}% <progress value={transcriber.state.progress} max="100"/></div>}
+              {transcriber.state.phase==='running'&&<div className="task-status"><LoaderCircle className="spin" size={15}/>正在使用 {transcriber.state.device==='webgpu'?'WebGPU':'WASM'} 分段识别 · {Math.round(transcriber.state.progress)}% · {transcriber.state.segments} 段完成 <progress value={transcriber.state.progress} max="100"/> {transcriber.state.partial&&<span className="transcript-snippet">{transcriber.state.partial}</span>}</div>}
+              {transcriber.state.phase==='done'&&<div className="task-status done"><Check size={15}/>处理完成 · {transcriber.state.segments} 个识别分段 · {transcriber.state.seconds.toFixed(1)} 秒</div>}
               {transcriber.state.phase==='error'&&<div className="task-status failed"><AlertTriangle size={15}/>{transcriber.state.message}</div>}
             </section>
           </div>
@@ -336,7 +324,7 @@ export default function App(){
           </aside>
         </div>
         <Timeline duration={effectiveDuration} cues={cues} peaks={peaks} time={time} selectedId={selectedId} onSeek={seek} onSelect={setSelectedId} onUpdate={updateCue}/>
-        <div className="bottom-meta"><div><Clock3 size={14}/> {effectiveDuration?`媒体时长 ${fmt(effectiveDuration,'vtt')}`:'等待媒体'} <span className="dot">·</span>{selectedCue?`已选中第 ${cues.findIndex(c=>c.id===selectedId)+1} 条字幕`:'未选择字幕'}</div><div><button onClick={()=>void makeWaveform()} disabled={!file||decoding||busy}><AudioLines size={14}/> {peaks.length?'重新提取波形':'提取音频波形'}</button><span className="dot">·</span><a href="https://github.com/sudesh1456/whisper-caption-editor" target="_blank" rel="noreferrer">原项目 / MIT</a></div></div>
+        <div className="bottom-meta"><div><Clock3 size={14}/> {effectiveDuration?`媒体时长 ${fmt(effectiveDuration,'vtt')}`:'等待媒体'} <span className="dot">·</span>{selectedCue?`已选中第 ${cues.findIndex(c=>c.id===selectedId)+1} 条字幕`:'未选择字幕'}</div><div><button onClick={()=>void makeWaveform()} disabled={!file||busy}><AudioLines size={14}/> {peaks.length?'重新提取波形':'提取音频波形'}</button><span className="dot">·</span><a href="https://github.com/sudesh1456/whisper-caption-editor" target="_blank" rel="noreferrer">原项目 / MIT</a></div></div>
       </main>
     </div>
   </div>;
